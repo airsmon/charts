@@ -1,0 +1,9 @@
+.DS_Store
+.git/
+.github/
+.gitignore
+.local/
+Makefile
+scripts/
+*.tgz
+values-targets.yaml

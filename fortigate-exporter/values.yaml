@@ -1,0 +1,221 @@
+replicaCount: 1
+
+image:
+  repository: quay.io/prometheuscommunity/fortigate-exporter
+  tag: v1.25.0
+  # Multi-architecture manifest digest for the upstream v1.25.0 image.
+  digest: sha256:aba22c240ad8efc8cc068c7afa9ff342b8f669c7afde5984d7a5845039d6bf04
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+auth:
+  # This Secret must be created outside Helm so tokens never enter Helm values
+  # or Helm release history.
+  existingSecret: fortigate-exporter-auth
+  key: fortigate-key.yaml
+  # Increment this value after changing the external Secret. The exporter reads
+  # its authentication file only during startup.
+  revision: "1"
+
+extraCA:
+  # Optional existing ConfigMap containing a PEM CA bundle used to verify
+  # FortiGate HTTPS certificates.
+  existingConfigMap: ""
+  key: ca.crt
+  revision: "1"
+
+exporter:
+  port: 9710
+  scrapeTimeoutSeconds: 30
+  httpsTimeoutSeconds: 10
+  insecureSkipVerify: false
+  maxBgpPaths: 10000
+  maxVpnUsers: 0
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 9710
+  annotations: {}
+  labels: {}
+
+# kube-prometheus-stack's Grafana sidecar discovers ConfigMaps with this label.
+# Change the label map when your Grafana sidecar uses a different selector.
+grafanaDashboard:
+  enabled: true
+  labels:
+    grafana_dashboard: "1"
+  annotations: {}
+
+# Labels used by Prometheus Operator selectors. The default matches a
+# kube-prometheus-stack release named "kube-prometheus-stack".
+monitoringLabels:
+  release: kube-prometheus-stack
+
+serviceMonitor:
+  enabled: true
+  jobName: fortigate_exporter
+  interval: 30s
+  scrapeTimeout: 10s
+
+probe:
+  enabled: true
+  jobName: fortigate
+  interval: 60s
+  scrapeTimeout: 35s
+
+# One Probe object is rendered per target. Keep this empty until a test target
+# and matching entry in the external authentication Secret are available.
+targets: []
+#  - name: fortigate-test
+#    url: https://fortigate-test.example.internal
+#    labels:
+#      site: shanghai
+#      environment: test
+#    interval: 60s
+#    scrapeTimeout: 35s
+
+prometheusRule:
+  enabled: true
+  exporterDown:
+    for: 5m
+    severity: critical
+  requestFailure:
+    for: 3m
+    severity: critical
+  apiUnavailable:
+    for: 3m
+    severity: critical
+  probeFailure:
+    for: 5m
+    severity: warning
+  targetsMissing:
+    for: 5m
+    severity: warning
+  slowProbe:
+    thresholdSeconds: 25
+    for: 10m
+    severity: warning
+  highCPU:
+    thresholdRatio: 0.9
+    for: 10m
+    severity: warning
+  highMemory:
+    thresholdRatio: 0.9
+    for: 10m
+    severity: warning
+  clockSkew:
+    thresholdSeconds: 120
+    for: 10m
+    severity: warning
+  logDisk:
+    thresholdRatio: 0.85
+    for: 30m
+    severity: warning
+  certificateExpiry:
+    warningDays: 30
+    criticalDays: 7
+    for: 1h
+    warningSeverity: warning
+    criticalSeverity: critical
+  vdomLicense:
+    thresholdRatio: 0.9
+    for: 30m
+    severity: warning
+  ipsecTunnels:
+    # Only list Phase2 tunnels that must remain established continuously.
+    # Empty disables the IPsec tunnel down/missing rules.
+    mustStayUp: []
+    #  - device: fortigate-device-a
+    #    vdom: root
+    #    phase1: IPsecToDatacenter
+    #    phase2: Datacenter-Network
+    for: 5m
+    severity: critical
+  wanBandwidth:
+    # Map Probe target names to WAN business aliases and contracted bandwidth.
+    # downstreamKbps/upstreamKbps use decimal kilobits per second (1 Kbps =
+    # 1000 bit/s). An empty map disables the four WAN bandwidth rules.
+    devices: {}
+    #  fortigate-device-a:
+    #    aliasRegex: "^[(]WAN[)]$"
+    #    downstreamKbps: 100000
+    #    upstreamKbps: 50000
+    warning:
+      thresholdRatio: 0.85
+      for: 15m
+      severity: warning
+    critical:
+      thresholdRatio: 0.95
+      for: 5m
+      severity: critical
+  criticalInterfaces:
+    # fortigate_interface_link_up does not expose administrative state. Enable
+    # these rules only with an explicit business-interface allowlist.
+    # deviceAliasRegex has the highest priority and selects stable business
+    # aliases independently of model-specific physical interface names.
+    deviceAliasRegex: {}
+    # When deviceNameRegex is non-empty, it takes precedence over nameRegex but
+    # is ignored when deviceAliasRegex is non-empty.
+    # Map Probe target names (the fortigate_device label) to interface regexes;
+    # devices omitted from the map are intentionally not monitored by these
+    # interface rules.
+    deviceNameRegex: {}
+    # Backward-compatible global selector used only when both device maps are
+    # empty.
+    nameRegex: ""
+    down:
+      enabled: false
+      for: 2m
+      severity: critical
+    errorRatio:
+      enabled: false
+      thresholdRatio: 0.01
+      minimumPacketsPerSecond: 10
+      for: 10m
+      severity: warning
+    utilization:
+      enabled: false
+      # Optional per-device alias allowlist for the legacy physical-speed
+      # utilization rules. When empty, the parent interface selector is used.
+      deviceAliasRegex: {}
+      thresholdRatio: 0.85
+      for: 15m
+      severity: warning
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

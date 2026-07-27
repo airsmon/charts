@@ -1,0 +1,33 @@
+{{- if .Values.probe.enabled }}
+{{- $root := . }}
+{{- range $target := .Values.targets }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: {{ include "fortigate-exporter.probeName" (dict "root" $root "target" $target) }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- with $root.Values.monitoringLabels }}
+    {{- toYaml (omit . "helm.sh/chart" "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/version" "app.kubernetes.io/managed-by" "app.kubernetes.io/component") | nindent 4 }}
+    {{- end }}
+    {{- include "fortigate-exporter.labels" $root | nindent 4 }}
+spec:
+  jobName: {{ $root.Values.probe.jobName | quote }}
+  interval: {{ default $root.Values.probe.interval $target.interval | quote }}
+  scrapeTimeout: {{ default $root.Values.probe.scrapeTimeout $target.scrapeTimeout | quote }}
+  prober:
+    url: {{ printf "%s.%s.svc:%d" (include "fortigate-exporter.fullname" $root) $root.Release.Namespace (int $root.Values.service.port) | quote }}
+    scheme: http
+    path: /probe
+  targets:
+    staticConfig:
+      static:
+        - {{ required (printf "targets[%s].url is required" $target.name) $target.url | quote }}
+      labels:
+        fortigate_device: {{ $target.name | quote }}
+        {{- with (omit ($target.labels | default dict) "fortigate_device" "instance" "job") }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,376 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- $hasTargets := and .Values.probe.enabled (gt (len .Values.targets) 0) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "fortigate-exporter.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- with .Values.monitoringLabels }}
+    {{- toYaml (omit . "helm.sh/chart" "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/version" "app.kubernetes.io/managed-by" "app.kubernetes.io/component") | nindent 4 }}
+    {{- end }}
+    {{- include "fortigate-exporter.labels" . | nindent 4 }}
+spec:
+  groups:
+    {{- if or .Values.serviceMonitor.enabled $hasTargets }}
+    - name: fortigate_exporter.availability
+      rules:
+        {{- if .Values.serviceMonitor.enabled }}
+        - alert: FortiGateExporterDown
+          expr: |
+            (up{job={{ .Values.serviceMonitor.jobName | quote }}} == 0)
+            or absent(up{job={{ .Values.serviceMonitor.jobName | quote }}})
+          for: {{ .Values.prometheusRule.exporterDown.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.exporterDown.severity }}
+          annotations:
+            summary: "FortiGate exporter 不可用"
+            description: "Prometheus 无法采集 FortiGate exporter 自身指标。"
+        {{- end }}
+        {{- if $hasTargets }}
+        - alert: FortiGateProbeRequestFailed
+          expr: up{job={{ .Values.probe.jobName | quote }}} == 0
+          for: {{ .Values.prometheusRule.requestFailure.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.requestFailure.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 探测请求失败'
+            description: "Exporter 返回 HTTP 错误或 Prometheus 无法完成请求；应检查目标 URL、Secret 键、TLS 和 exporter 日志。"
+        - alert: FortiGateAPIUnavailable
+          expr: |
+            probe_success{job={{ .Values.probe.jobName | quote }}} == 0
+            unless on (job, instance)
+              fortigate_version_info{job={{ .Values.probe.jobName | quote }}}
+          for: {{ .Values.prometheusRule.apiUnavailable.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.apiUnavailable.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} API 不可用'
+            description: "Exporter 请求已完成，但无法获得设备状态；应检查设备可达性、API Token、Trusted Hosts 和 TLS。"
+        - alert: FortiGateProbePartialFailure
+          expr: |
+            probe_success{job={{ .Values.probe.jobName | quote }}} == 0
+            and on (job, instance)
+              fortigate_version_info{job={{ .Values.probe.jobName | quote }}}
+          for: {{ .Values.prometheusRule.probeFailure.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.probeFailure.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 部分指标采集失败'
+            description: "设备基础状态正常，但至少一个已启用的子 probe 失败；应检查 exporter 日志中的 403、API 兼容性和超时。"
+        - alert: FortiGateProbeTargetsMissing
+          expr: |
+            (count(probe_success{job={{ .Values.probe.jobName | quote }}}) or vector(0))
+              < {{ len .Values.targets }}
+          for: {{ .Values.prometheusRule.targetsMissing.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.targetsMissing.severity }}
+          annotations:
+            summary: "FortiGate 探测目标数量不足"
+            description: '期望 {{ len .Values.targets }} 个目标，但当前 probe_success 时序数量不足。'
+        - alert: FortiGateProbeSlow
+          expr: |
+            probe_duration_seconds{job={{ .Values.probe.jobName | quote }}}
+              > {{ .Values.prometheusRule.slowProbe.thresholdSeconds }}
+          for: {{ .Values.prometheusRule.slowProbe.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.slowProbe.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 探测耗时过长'
+            description: '探测耗时持续超过 {{ .Values.prometheusRule.slowProbe.thresholdSeconds }} 秒，已接近 exporter 超时。'
+        {{- end }}
+    {{- end }}
+    - name: fortigate_exporter.resources
+      rules:
+        - alert: FortiGateHighCPU
+          expr: |
+            max without (processor) (
+              fortigate_cpu_usage_ratio{job={{ .Values.probe.jobName | quote }}}
+            ) > {{ .Values.prometheusRule.highCPU.thresholdRatio }}
+          for: {{ .Values.prometheusRule.highCPU.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.highCPU.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} CPU 使用率过高'
+            description: '至少一个 CPU 核心使用率持续高于 {{ mulf .Values.prometheusRule.highCPU.thresholdRatio 100 }}%。'
+        - alert: FortiGateHighMemory
+          expr: |
+            fortigate_memory_usage_ratio{job={{ .Values.probe.jobName | quote }}}
+              > {{ .Values.prometheusRule.highMemory.thresholdRatio }}
+          for: {{ .Values.prometheusRule.highMemory.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.highMemory.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 内存使用率过高'
+            description: '内存使用率持续高于 {{ mulf .Values.prometheusRule.highMemory.thresholdRatio 100 }}%。'
+        - alert: FortiGateClockSkew
+          expr: |
+            abs(
+              time()
+              - fortigate_time_seconds{job={{ .Values.probe.jobName | quote }}}
+            ) > {{ .Values.prometheusRule.clockSkew.thresholdSeconds }}
+          for: {{ .Values.prometheusRule.clockSkew.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.clockSkew.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 时钟偏差过大'
+            description: 'FortiGate 与 Prometheus 的时间偏差持续超过 {{ .Values.prometheusRule.clockSkew.thresholdSeconds }} 秒。'
+        - alert: FortiGateLogDiskHighUsage
+          expr: |
+            (
+              fortigate_log_disk_used_bytes{job={{ .Values.probe.jobName | quote }}}
+              /
+              fortigate_log_disk_total_bytes{job={{ .Values.probe.jobName | quote }}}
+            ) > {{ .Values.prometheusRule.logDisk.thresholdRatio }}
+            and
+              fortigate_log_disk_total_bytes{job={{ .Values.probe.jobName | quote }}} > 0
+          for: {{ .Values.prometheusRule.logDisk.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.logDisk.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 日志盘使用率过高'
+            description: 'VDOM {{ "{{ $labels.vdom }}" }} 日志盘使用率持续高于 {{ mulf .Values.prometheusRule.logDisk.thresholdRatio 100 }}%。'
+        - alert: FortiGateCertificateExpiringSoon
+          expr: |
+            (
+              (
+                fortigate_certificate_valid_to_seconds{job={{ .Values.probe.jobName | quote }}}
+                - time()
+              ) < {{ mul .Values.prometheusRule.certificateExpiry.warningDays 86400 }}
+            )
+            and on (job, instance, name, source, scope, vdom)
+              (
+                (
+                  fortigate_certificate_valid_to_seconds{job={{ .Values.probe.jobName | quote }}}
+                  - time()
+                ) >= {{ mul .Values.prometheusRule.certificateExpiry.criticalDays 86400 }}
+              )
+            and on (job, instance, name, source, scope, vdom)
+              fortigate_certificate_cmdb_references{job={{ .Values.probe.jobName | quote }}} > 0
+            and on (job, instance, name, source, scope, vdom)
+              fortigate_certificate_info{
+                job={{ .Values.probe.jobName | quote }},
+                status="valid"
+              } == 1
+          for: {{ .Values.prometheusRule.certificateExpiry.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.certificateExpiry.warningSeverity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 证书 {{ "{{ $labels.name }}" }} 即将过期'
+            description: '仍在使用的有效证书将在 {{ .Values.prometheusRule.certificateExpiry.warningDays }} 天内过期。'
+        - alert: FortiGateCertificateExpiringCritical
+          expr: |
+            (
+              (
+                fortigate_certificate_valid_to_seconds{job={{ .Values.probe.jobName | quote }}}
+                - time()
+              ) < {{ mul .Values.prometheusRule.certificateExpiry.criticalDays 86400 }}
+            )
+            and on (job, instance, name, source, scope, vdom)
+              fortigate_certificate_cmdb_references{job={{ .Values.probe.jobName | quote }}} > 0
+            and on (job, instance, name, source, scope, vdom)
+              fortigate_certificate_info{
+                job={{ .Values.probe.jobName | quote }},
+                status="valid"
+              } == 1
+          for: {{ .Values.prometheusRule.certificateExpiry.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.certificateExpiry.criticalSeverity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 证书 {{ "{{ $labels.name }}" }} 即将过期'
+            description: '仍在使用的有效证书将在 {{ .Values.prometheusRule.certificateExpiry.criticalDays }} 天内过期。'
+        - alert: FortiGateVDOMLicenseNearLimit
+          expr: |
+            (
+              fortigate_license_vdom_usage{job={{ .Values.probe.jobName | quote }}}
+              /
+              fortigate_license_vdom_max{job={{ .Values.probe.jobName | quote }}}
+            ) >= {{ .Values.prometheusRule.vdomLicense.thresholdRatio }}
+            and
+              fortigate_license_vdom_max{job={{ .Values.probe.jobName | quote }}} > 0
+          for: {{ .Values.prometheusRule.vdomLicense.for }}
+          labels:
+            severity: {{ .Values.prometheusRule.vdomLicense.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} VDOM 授权接近上限'
+            description: 'VDOM 使用量已达到授权上限的 {{ mulf .Values.prometheusRule.vdomLicense.thresholdRatio 100 }}% 或更高。'
+    {{- $ipsecTunnels := .Values.prometheusRule.ipsecTunnels }}
+    {{- $mustStayUpTunnels := $ipsecTunnels.mustStayUp | default list }}
+    {{- if and $hasTargets (gt (len $mustStayUpTunnels) 0) }}
+    {{- $ipsecDownBranches := list }}
+    {{- $ipsecMissingBranches := list }}
+    {{- range $tunnel := $mustStayUpTunnels }}
+    {{- $target := dict }}
+    {{- range $candidate := $.Values.targets }}
+    {{- if eq $candidate.name $tunnel.device }}
+    {{- $target = $candidate }}
+    {{- end }}
+    {{- end }}
+    {{- if eq (len $target) 0 }}
+    {{- fail (printf "prometheusRule.ipsecTunnels.mustStayUp references unknown target %q" $tunnel.device) }}
+    {{- end }}
+    {{- $downBranch := printf "(max by (environment, fortigate_device, instance, job, namespace, site, vdom, parent, name) (\n  fortigate_ipsec_tunnel_up{job=%q,fortigate_device=%q,vdom=%q,parent=%q,name=%q}\n) == 0)\nand on (job, fortigate_device)\n  (probe_success{job=%q,fortigate_device=%q} == 1)" $.Values.probe.jobName $tunnel.device $tunnel.vdom $tunnel.phase1 $tunnel.phase2 $.Values.probe.jobName $tunnel.device }}
+    {{- $missingBranch := printf "(probe_success{job=%q,fortigate_device=%q} == 1)\n* on (job, fortigate_device) group_left(vdom, parent, name)\n  absent(fortigate_ipsec_tunnel_up{job=%q,fortigate_device=%q,vdom=%q,parent=%q,name=%q})" $.Values.probe.jobName $tunnel.device $.Values.probe.jobName $tunnel.device $tunnel.vdom $tunnel.phase1 $tunnel.phase2 }}
+    {{- $ipsecDownBranches = append $ipsecDownBranches $downBranch }}
+    {{- $ipsecMissingBranches = append $ipsecMissingBranches $missingBranch }}
+    {{- end }}
+    - name: fortigate_exporter.ipsec
+      rules:
+        - alert: FortiGateIPsecTunnelDown
+          expr: |
+{{ join "\nor\n" $ipsecDownBranches | indent 12 }}
+          for: {{ $ipsecTunnels.for }}
+          labels:
+            severity: {{ $ipsecTunnels.severity }}
+            component: fortigate-ipsec
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.site }}" }} IPsec {{ "{{ $labels.parent }}" }}/{{ "{{ $labels.name }}" }} DOWN'
+            description: '实例={{ "{{ $labels.instance }}" }}；站点={{ "{{ $labels.site }}" }}；VDOM={{ "{{ $labels.vdom }}" }}；Phase1={{ "{{ $labels.parent }}" }}；Phase2={{ "{{ $labels.name }}" }}；必须常通的 IPsec Phase2 持续为 DOWN。'
+        - alert: FortiGateIPsecTunnelMissing
+          expr: |
+{{ join "\nor\n" $ipsecMissingBranches | indent 12 }}
+          for: {{ $ipsecTunnels.for }}
+          labels:
+            severity: {{ $ipsecTunnels.severity }}
+            component: fortigate-ipsec
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.site }}" }} IPsec {{ "{{ $labels.parent }}" }}/{{ "{{ $labels.name }}" }} 指标缺失'
+            description: '实例={{ "{{ $labels.instance }}" }}；站点={{ "{{ $labels.site }}" }}；VDOM={{ "{{ $labels.vdom }}" }}；Phase1={{ "{{ $labels.parent }}" }}；Phase2={{ "{{ $labels.name }}" }}；设备探测正常，但必须常通的 IPsec Phase2 状态指标持续缺失。'
+    {{- end }}
+    {{- $criticalInterfaces := .Values.prometheusRule.criticalInterfaces }}
+    {{- $criticalInterfaceAliases := $criticalInterfaces.deviceAliasRegex | default dict }}
+    {{- $criticalInterfaceDevices := $criticalInterfaces.deviceNameRegex | default dict }}
+    {{- $criticalInterfaceUtilizationAliases := $criticalInterfaces.utilization.deviceAliasRegex | default dict }}
+    {{- $hasCriticalInterfaceSelector := or $criticalInterfaces.nameRegex (gt (len $criticalInterfaceDevices) 0) (gt (len $criticalInterfaceAliases) 0) (gt (len $criticalInterfaceUtilizationAliases) 0) }}
+    {{- if and $hasTargets $hasCriticalInterfaceSelector (or $criticalInterfaces.down.enabled $criticalInterfaces.errorRatio.enabled $criticalInterfaces.utilization.enabled) }}
+    - name: fortigate_exporter.interfaces
+      rules:
+        {{- if $criticalInterfaces.down.enabled }}
+        - alert: FortiGateCriticalInterfaceDown
+          expr: |
+            {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_link_up") }} == 0
+          for: {{ $criticalInterfaces.down.for }}
+          labels:
+            severity: {{ $criticalInterfaces.down.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）断开'
+            description: '关键业务接口 {{ "{{ $labels.vdom }}" }}/{{ "{{ $labels.alias }}" }}（物理接口 {{ "{{ $labels.name }}" }}）链路持续为 down。'
+        {{- end }}
+        {{- if $criticalInterfaces.errorRatio.enabled }}
+        - alert: FortiGateCriticalInterfaceReceiveErrors
+          expr: |
+            (
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_receive_errors_total" "function" "rate" "range" "[5m]") }}
+              /
+              clamp_min(
+                {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_receive_packets_total" "function" "rate" "range" "[5m]") }},
+                1
+              )
+            ) > {{ $criticalInterfaces.errorRatio.thresholdRatio }}
+            and
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_receive_packets_total" "function" "rate" "range" "[5m]") }} > {{ $criticalInterfaces.errorRatio.minimumPacketsPerSecond }}
+          for: {{ $criticalInterfaces.errorRatio.for }}
+          labels:
+            severity: {{ $criticalInterfaces.errorRatio.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）接收错误率过高'
+            description: '关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）接收错误包比例持续超过 {{ mulf $criticalInterfaces.errorRatio.thresholdRatio 100 }}%。'
+        - alert: FortiGateCriticalInterfaceTransmitErrors
+          expr: |
+            (
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_transmit_errors_total" "function" "rate" "range" "[5m]") }}
+              /
+              clamp_min(
+                {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_transmit_packets_total" "function" "rate" "range" "[5m]") }},
+                1
+              )
+            ) > {{ $criticalInterfaces.errorRatio.thresholdRatio }}
+            and
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_transmit_packets_total" "function" "rate" "range" "[5m]") }} > {{ $criticalInterfaces.errorRatio.minimumPacketsPerSecond }}
+          for: {{ $criticalInterfaces.errorRatio.for }}
+          labels:
+            severity: {{ $criticalInterfaces.errorRatio.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）发送错误率过高'
+            description: '关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）发送错误包比例持续超过 {{ mulf $criticalInterfaces.errorRatio.thresholdRatio 100 }}%。'
+        {{- end }}
+        {{- if $criticalInterfaces.utilization.enabled }}
+        - alert: FortiGateCriticalInterfaceReceiveHighUtilization
+          expr: |
+            (
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_receive_bytes_total" "function" "rate" "range" "[5m]" "deviceAliasRegexOverride" $criticalInterfaceUtilizationAliases) }} * 8
+              /
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_speed_bps" "deviceAliasRegexOverride" $criticalInterfaceUtilizationAliases) }}
+            ) > {{ $criticalInterfaces.utilization.thresholdRatio }}
+            and
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_speed_bps" "deviceAliasRegexOverride" $criticalInterfaceUtilizationAliases) }} > 0
+          for: {{ $criticalInterfaces.utilization.for }}
+          labels:
+            severity: {{ $criticalInterfaces.utilization.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）接收带宽利用率过高'
+            description: '关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）接收带宽利用率持续超过 {{ mulf $criticalInterfaces.utilization.thresholdRatio 100 }}%。'
+        - alert: FortiGateCriticalInterfaceTransmitHighUtilization
+          expr: |
+            (
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_transmit_bytes_total" "function" "rate" "range" "[5m]" "deviceAliasRegexOverride" $criticalInterfaceUtilizationAliases) }} * 8
+              /
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_speed_bps" "deviceAliasRegexOverride" $criticalInterfaceUtilizationAliases) }}
+            ) > {{ $criticalInterfaces.utilization.thresholdRatio }}
+            and
+              {{ include "fortigate-exporter.criticalInterfaceMetric" (dict "root" . "config" $criticalInterfaces "metric" "fortigate_interface_speed_bps" "deviceAliasRegexOverride" $criticalInterfaceUtilizationAliases) }} > 0
+          for: {{ $criticalInterfaces.utilization.for }}
+          labels:
+            severity: {{ $criticalInterfaces.utilization.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} 关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）发送带宽利用率过高'
+            description: '关键接口 {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）发送带宽利用率持续超过 {{ mulf $criticalInterfaces.utilization.thresholdRatio 100 }}%。'
+        {{- end }}
+    {{- end }}
+    {{- $wanBandwidth := .Values.prometheusRule.wanBandwidth }}
+    {{- $wanBandwidthDevices := $wanBandwidth.devices | default dict }}
+    {{- if and $hasTargets (gt (len $wanBandwidthDevices) 0) }}
+    - name: fortigate_exporter.wan-bandwidth
+      rules:
+        - alert: FortiGateWANReceiveHighUtilization
+          expr: |
+            {{ include "fortigate-exporter.wanBandwidthUtilization" (dict "root" . "config" $wanBandwidth "direction" "receive") }}
+              > {{ $wanBandwidth.warning.thresholdRatio }}
+          for: {{ $wanBandwidth.warning.for }}
+          labels:
+            severity: {{ $wanBandwidth.warning.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} WAN {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）下行利用率过高'
+            description: 'WAN 下行流量持续超过已配置下行合同带宽的 {{ mulf $wanBandwidth.warning.thresholdRatio 100 }}%。'
+        - alert: FortiGateWANTransmitHighUtilization
+          expr: |
+            {{ include "fortigate-exporter.wanBandwidthUtilization" (dict "root" . "config" $wanBandwidth "direction" "transmit") }}
+              > {{ $wanBandwidth.warning.thresholdRatio }}
+          for: {{ $wanBandwidth.warning.for }}
+          labels:
+            severity: {{ $wanBandwidth.warning.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} WAN {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）上行利用率过高'
+            description: 'WAN 上行流量持续超过已配置上行合同带宽的 {{ mulf $wanBandwidth.warning.thresholdRatio 100 }}%。'
+        - alert: FortiGateWANReceiveCriticalUtilization
+          expr: |
+            {{ include "fortigate-exporter.wanBandwidthUtilization" (dict "root" . "config" $wanBandwidth "direction" "receive") }}
+              > {{ $wanBandwidth.critical.thresholdRatio }}
+          for: {{ $wanBandwidth.critical.for }}
+          labels:
+            severity: {{ $wanBandwidth.critical.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} WAN {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）下行利用率严重过高'
+            description: 'WAN 下行流量持续超过已配置下行合同带宽的 {{ mulf $wanBandwidth.critical.thresholdRatio 100 }}%。'
+        - alert: FortiGateWANTransmitCriticalUtilization
+          expr: |
+            {{ include "fortigate-exporter.wanBandwidthUtilization" (dict "root" . "config" $wanBandwidth "direction" "transmit") }}
+              > {{ $wanBandwidth.critical.thresholdRatio }}
+          for: {{ $wanBandwidth.critical.for }}
+          labels:
+            severity: {{ $wanBandwidth.critical.severity }}
+          annotations:
+            summary: 'FortiGate {{ "{{ $labels.instance }}" }} WAN {{ "{{ $labels.alias }}" }}（{{ "{{ $labels.name }}" }}）上行利用率严重过高'
+            description: 'WAN 上行流量持续超过已配置上行合同带宽的 {{ mulf $wanBandwidth.critical.thresholdRatio 100 }}%。'
+    {{- end }}
+{{- end }}

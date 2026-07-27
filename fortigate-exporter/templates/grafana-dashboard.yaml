@@ -1,0 +1,20 @@
+{{- if .Values.grafanaDashboard.enabled }}
+{{- $dashboard := required "grafana/fortigate_exporter-overview.json is required" (.Files.Get "grafana/fortigate_exporter-overview.json") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fortigate-exporter.dashboardName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- with .Values.grafanaDashboard.labels }}
+    {{- toYaml (omit . "helm.sh/chart" "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/version" "app.kubernetes.io/managed-by" "app.kubernetes.io/component") | nindent 4 }}
+    {{- end }}
+    {{- include "fortigate-exporter.labels" . | nindent 4 }}
+  {{- with .Values.grafanaDashboard.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  fortigate_exporter-overview.json: |-
+    {{- $dashboard | nindent 4 }}
+{{- end }}

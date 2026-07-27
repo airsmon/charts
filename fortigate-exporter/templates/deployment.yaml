@@ -1,0 +1,192 @@
+{{- $reservedLabels := list "helm.sh/chart" "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/version" "app.kubernetes.io/managed-by" "app.kubernetes.io/component" -}}
+{{- range $label := $reservedLabels -}}
+{{- if hasKey ($.Values.podLabels | default dict) $label -}}
+{{- fail (printf "podLabels must not override reserved label %q" $label) -}}
+{{- end -}}
+{{- if hasKey ($.Values.service.labels | default dict) $label -}}
+{{- fail (printf "service.labels must not override reserved label %q" $label) -}}
+{{- end -}}
+{{- if hasKey ($.Values.monitoringLabels | default dict) $label -}}
+{{- fail (printf "monitoringLabels must not override reserved label %q" $label) -}}
+{{- end -}}
+{{- if hasKey ($.Values.grafanaDashboard.labels | default dict) $label -}}
+{{- fail (printf "grafanaDashboard.labels must not override reserved label %q" $label) -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey (.Values.service.labels | default dict) "monitoring-job" -}}
+{{- fail "service.labels must not override reserved label \"monitoring-job\"" -}}
+{{- end -}}
+{{- range $annotation := list "fortigate-exporter/auth-revision" "fortigate-exporter/ca-revision" -}}
+{{- if hasKey ($.Values.podAnnotations | default dict) $annotation -}}
+{{- fail (printf "podAnnotations must not override reserved annotation %q" $annotation) -}}
+{{- end -}}
+{{- end -}}
+{{- $targetNames := dict -}}
+{{- $targetURLs := dict -}}
+{{- range $target := .Values.targets -}}
+{{- if hasKey $targetNames $target.name -}}
+{{- fail (printf "targets contains duplicate name %q" $target.name) -}}
+{{- end -}}
+{{- if hasKey $targetURLs $target.url -}}
+{{- fail (printf "targets contains duplicate url %q" $target.url) -}}
+{{- end -}}
+{{- $_ := set $targetNames $target.name true -}}
+{{- $_ := set $targetURLs $target.url true -}}
+{{- range $label := list "fortigate_device" "instance" "job" -}}
+{{- if hasKey ($target.labels | default dict) $label -}}
+{{- fail (printf "target %q labels must not override reserved label %q" $target.name $label) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if gt (int .Values.exporter.httpsTimeoutSeconds) (int .Values.exporter.scrapeTimeoutSeconds) -}}
+{{- fail "exporter.httpsTimeoutSeconds must be less than or equal to exporter.scrapeTimeoutSeconds" -}}
+{{- end -}}
+{{- if ge (float64 .Values.prometheusRule.slowProbe.thresholdSeconds) (float64 .Values.exporter.scrapeTimeoutSeconds) -}}
+{{- fail "prometheusRule.slowProbe.thresholdSeconds must be less than exporter.scrapeTimeoutSeconds" -}}
+{{- end -}}
+{{- if le (int .Values.prometheusRule.certificateExpiry.warningDays) (int .Values.prometheusRule.certificateExpiry.criticalDays) -}}
+{{- fail "prometheusRule.certificateExpiry.warningDays must be greater than criticalDays" -}}
+{{- end -}}
+{{- if le (float64 .Values.prometheusRule.wanBandwidth.critical.thresholdRatio) (float64 .Values.prometheusRule.wanBandwidth.warning.thresholdRatio) -}}
+{{- fail "prometheusRule.wanBandwidth.critical.thresholdRatio must be greater than warning.thresholdRatio" -}}
+{{- end -}}
+{{- if .Values.prometheusRule.enabled -}}
+{{- range $tunnel := .Values.prometheusRule.ipsecTunnels.mustStayUp -}}
+{{- if not (hasKey $targetNames $tunnel.device) -}}
+{{- fail (printf "prometheusRule.ipsecTunnels.mustStayUp references unknown target %q" $tunnel.device) -}}
+{{- end -}}
+{{- end -}}
+{{- range $device := keys (.Values.prometheusRule.wanBandwidth.devices | default dict) -}}
+{{- if not (hasKey $targetNames $device) -}}
+{{- fail (printf "prometheusRule.wanBandwidth.devices references unknown target %q" $device) -}}
+{{- end -}}
+{{- end -}}
+{{- range $field, $devices := dict "deviceAliasRegex" .Values.prometheusRule.criticalInterfaces.deviceAliasRegex "deviceNameRegex" .Values.prometheusRule.criticalInterfaces.deviceNameRegex "utilization.deviceAliasRegex" .Values.prometheusRule.criticalInterfaces.utilization.deviceAliasRegex -}}
+{{- range $device := keys ($devices | default dict) -}}
+{{- if not (hasKey $targetNames $device) -}}
+{{- fail (printf "prometheusRule.criticalInterfaces.%s references unknown target %q" $field $device) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fortigate-exporter.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fortigate-exporter.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "fortigate-exporter.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- with .Values.podLabels }}
+        {{- toYaml (omit . "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component") | nindent 8 }}
+        {{- end }}
+        {{- include "fortigate-exporter.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: exporter
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml (omit . "fortigate-exporter/auth-revision" "fortigate-exporter/ca-revision") | nindent 8 }}
+        {{- end }}
+        fortigate-exporter/auth-revision: {{ .Values.auth.revision | quote }}
+        fortigate-exporter/ca-revision: {{ .Values.extraCA.revision | quote }}
+    spec:
+      serviceAccountName: {{ include "fortigate-exporter.serviceAccountName" . | quote }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fortigate-exporter
+          image: {{ include "fortigate-exporter.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          args:
+            - {{ printf "-auth-file=/etc/fortigate_exporter/auth/%s" .Values.auth.key | quote }}
+            - {{ printf "-listen=:%d" (int .Values.exporter.port) | quote }}
+            - {{ printf "-scrape-timeout=%d" (int .Values.exporter.scrapeTimeoutSeconds) | quote }}
+            - {{ printf "-https-timeout=%d" (int .Values.exporter.httpsTimeoutSeconds) | quote }}
+            - {{ printf "-max-bgp-paths=%d" (int .Values.exporter.maxBgpPaths) | quote }}
+            - {{ printf "-max-vpn-users=%d" (int .Values.exporter.maxVpnUsers) | quote }}
+            {{- if .Values.exporter.insecureSkipVerify }}
+            - "-insecure"
+            {{- end }}
+            {{- if .Values.extraCA.existingConfigMap }}
+            - "-extra-ca-certs=/etc/fortigate_exporter/ca/ca.crt"
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.exporter.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: auth
+              mountPath: /etc/fortigate_exporter/auth
+              readOnly: true
+            {{- if .Values.extraCA.existingConfigMap }}
+            - name: extra-ca
+              mountPath: /etc/fortigate_exporter/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: auth
+          secret:
+            secretName: {{ required "auth.existingSecret is required" .Values.auth.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.auth.key | quote }}
+                path: {{ .Values.auth.key | quote }}
+        {{- if .Values.extraCA.existingConfigMap }}
+        - name: extra-ca
+          configMap:
+            name: {{ .Values.extraCA.existingConfigMap | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.extraCA.key | quote }}
+                path: ca.crt
+        {{- end }}
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

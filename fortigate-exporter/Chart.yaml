@@ -1,0 +1,21 @@
+apiVersion: v2
+name: fortigate-exporter
+description: Deploy fortigate_exporter with Prometheus Operator monitoring, alerting, and Grafana dashboards
+type: application
+version: 0.4.0
+appVersion: "1.25.0"
+annotations:
+  category: Monitoring
+  images: |
+    - name: fortigate_exporter
+      image: quay.io/prometheuscommunity/fortigate-exporter:v1.25.0
+  licenses: Apache-2.0
+home: https://github.com/prometheus-community/fortigate_exporter
+sources:
+  - https://github.com/prometheus-community/fortigate_exporter
+keywords:
+  - fortigate
+  - grafana
+  - kubernetes
+  - monitoring
+  - prometheus

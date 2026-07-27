@@ -1,0 +1,33 @@
+FortiGate exporter chart rendered successfully.
+
+Release:
+  {{ .Release.Name }} in namespace {{ .Release.Namespace }}
+
+Required external Secret:
+  {{ .Values.auth.existingSecret }} / {{ .Values.auth.key }}
+
+{{- if eq (len .Values.targets) 0 }}
+
+No Probe objects were rendered because targets is empty. Add the test target to a
+separate values file after creating the matching Secret entry.
+{{- else }}
+
+Rendered Probe targets:
+{{- range .Values.targets }}
+  - {{ .name }}: {{ .url }}
+{{- end }}
+{{- end }}
+
+The exporter reads its authentication file and extra CA only during startup.
+Increment auth.revision or extraCA.revision after updating either external object.
+
+{{- if .Values.grafanaDashboard.enabled }}
+
+Grafana dashboard ConfigMap:
+  {{ include "fortigate-exporter.fullname" . }}-dashboard
+
+The Grafana sidecar must select these labels:
+{{- range $key, $value := .Values.grafanaDashboard.labels }}
+  {{ $key }}={{ $value }}
+{{- end }}
+{{- end }}
