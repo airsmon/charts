@@ -1,0 +1,27 @@
+{{- if not .Values.config.existingConfigmap }}
+{{- $configuration := include "oxidized.defaultConfiguration" . }}
+{{- if .Values.config.configuration }}
+{{- $configuration = tpl .Values.config.configuration . }}
+{{- else }}
+{{- $configuration = regexReplaceAll "(?m)^[[:blank:]]+$" $configuration "" }}
+{{- $configuration = regexReplaceAll "\n{2,}" $configuration "\n" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oxidized.configMapName" . | quote }}
+  namespace: {{ include "oxidized.namespace" . | quote }}
+  labels:
+    {{- include "oxidized.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  config: |-
+{{ $configuration | trim | indent 4 }}
+  {{- with .Values.config.source.csv.routerDb }}
+  router.db: |-
+{{ . | trim | indent 4 }}
+  {{- end }}
+{{- end }}

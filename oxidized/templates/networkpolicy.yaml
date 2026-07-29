@@ -1,0 +1,57 @@
+{{- $ingressEnabled := and .Values.web.enabled .Values.networkPolicy.ingress.enabled -}}
+{{- $egressEnabled := .Values.networkPolicy.egress.enabled -}}
+{{- if and .Values.networkPolicy.enabled (or $ingressEnabled $egressEnabled) }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "oxidized.fullname" . | quote }}
+  namespace: {{ include "oxidized.namespace" . | quote }}
+  labels:
+    {{- include "oxidized.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "oxidized.workloadSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    {{- if $ingressEnabled }}
+    - Ingress
+    {{- end }}
+    {{- if $egressEnabled }}
+    - Egress
+    {{- end }}
+  {{- if $ingressEnabled }}
+  {{- if or .Values.networkPolicy.ingress.fromAllNamespaces .Values.networkPolicy.ingress.from .Values.tests.enabled }}
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.ingress.fromAllNamespaces }}
+        - namespaceSelector: {}
+        {{- else }}
+        {{- if .Values.tests.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "oxidized.testSelectorLabels" . | nindent 14 }}
+        {{- end }}
+        {{- with .Values.networkPolicy.ingress.from }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- end }}
+  {{- if $egressEnabled }}
+  egress:
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.cidr | quote }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.ports | nindent 8 }}
+  {{- end }}
+{{- end }}

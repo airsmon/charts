@@ -1,0 +1,41 @@
+Oxidized has been installed.
+
+Release: {{ .Release.Name }}
+Namespace: {{ include "oxidized.namespace" . }}
+
+{{- if .Values.web.enabled }}
+{{- if .Values.ingress.enabled }}
+Web endpoints:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+To access the web UI locally:
+  kubectl --namespace {{ include "oxidized.namespace" . }} \
+    port-forward service/{{ include "oxidized.fullname" . }} \
+    8888:{{ .Values.service.port }}
+{{- end }}
+{{- else }}
+The web UI, Service, Ingress, HTTP probes, and chart test are disabled.
+{{- end }}
+
+{{- if .Values.persistence.enabled }}
+Data claim: {{ include "oxidized.pvcName" . }}
+{{- if and (not .Values.persistence.existingClaim) (eq .Values.persistence.resourcePolicy "keep") }}
+The chart-created PVC is retained after helm uninstall.
+{{- end }}
+{{- else }}
+WARNING: persistence is disabled; backup data is stored in emptyDir.
+{{- end }}
+
+{{- if .Values.runtimeSecret.enabled }}
+Runtime credentials Secret: {{ include "oxidized.runtimeSecretName" . }}
+{{- end }}
+{{- if .Values.sshSecret.enabled }}
+SSH Secret: {{ include "oxidized.sshSecretName" . }}
+{{- end }}
+
+{{- if or (and .Values.runtimeSecret.enabled .Values.runtimeSecret.create) (and .Values.sshSecret.enabled .Values.sshSecret.create) }}
+WARNING: One or more Secrets were created from Helm values. Prefer externally
+managed Secrets in production so credentials are not stored in release history.
+{{- end }}

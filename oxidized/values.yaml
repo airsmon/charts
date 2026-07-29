@@ -1,0 +1,511 @@
+# Global image and storage overrides, following the common Bitnami values
+# contract. A non-empty global image registry takes precedence over image
+# registries configured below.
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  defaultStorageClass: ""
+  # Deprecated compatibility alias. Prefer `global.defaultStorageClass`.
+  storageClass: ""
+
+# Common naming and metadata.
+nameOverride: ""
+fullnameOverride: ""
+namespaceOverride: ""
+commonLabels: {}
+commonAnnotations: {}
+
+# Main Oxidized image. Set digest to pin an immutable image; it overrides tag.
+image:
+  registry: docker.io
+  repository: oxidized/oxidized
+  tag: "0.36.0"
+  digest: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Oxidized is a stateful single writer. Multiple replicas are intentionally not
+# supported by this chart.
+replicaCount: 1
+revisionHistoryLimit: 3
+updateStrategy:
+  type: Recreate
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+# The upstream image uses an init system and has not been verified with a
+# forced non-root main process. Keep the main context disabled unless a custom
+# image has been tested with the requested restrictions.
+podSecurityContext:
+  enabled: true
+  fsGroup: 30000
+  fsGroupChangePolicy: OnRootMismatch
+
+containerSecurityContext:
+  enabled: false
+
+# The built-in init container renders configuration and prepares SSH files.
+initContainerSecurityContext:
+  enabled: true
+  runAsUser: 30000
+  runAsGroup: 30000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+terminationGracePeriodSeconds: 30
+
+# Oxidized Web is also the REST API endpoint. Disabling it omits the Service,
+# Ingress, HTTP probes, NetworkPolicy ingress rule, and Helm test Pod.
+web:
+  enabled: true
+  listen: 0.0.0.0
+  port: 8888
+  urlPrefix: ""
+  vhosts: []
+
+service:
+  type: ClusterIP
+  port: 8888
+  nodePort: ""
+  clusterIP: ""
+  loadBalancerIP: ""
+  loadBalancerSourceRanges: []
+  externalTrafficPolicy: Cluster
+  sessionAffinity: None
+  sessionAffinityConfig: {}
+  annotations: {}
+
+# Positive seconds passed to the upstream reload helper when its fixed
+# localhost:8888 endpoint is compatible with the selected web settings.
+configReloadInterval: "600"
+command: []
+args: []
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 500m
+
+startupProbe:
+  enabled: true
+  path: /
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 18
+  successThreshold: 1
+
+readinessProbe:
+  enabled: true
+  path: /
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+livenessProbe:
+  enabled: true
+  path: /
+  initialDelaySeconds: 60
+  periodSeconds: 60
+  timeoutSeconds: 5
+  failureThreshold: 5
+  successThreshold: 1
+
+customStartupProbe: {}
+customReadinessProbe: {}
+customLivenessProbe: {}
+
+podLabels: {}
+podAnnotations: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+extraEnvVars: []
+lifecycleHooks: {}
+extraVolumeMounts: []
+extraVolumes: []
+initContainers: []
+sidecars: []
+
+tests:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: library/busybox
+    tag: "1.36"
+    digest: ""
+    pullPolicy: IfNotPresent
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+# The PVC is retained after `helm uninstall` by default to protect backups.
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 50Gi
+  annotations: {}
+  selector: {}
+  resourcePolicy: keep
+
+# SSH material is optional and disabled by default. Enable it for strict host
+# verification (known_hosts), device key authentication, or the githubrepo
+# hook. Prefer an externally managed Secret.
+sshSecret:
+  enabled: false
+  create: false
+  existingSecret: ""
+  name: ""
+  data:
+    id_rsa: ""
+    id_rsa_pub: ""
+    known_hosts: ""
+
+# Runtime credentials are substituted into the generated configuration by the
+# init container. Disable this only when an external configuration does not use
+# the documented placeholders.
+runtimeSecret:
+  enabled: true
+  create: false
+  existingSecret: ""
+  name: ""
+  secretKeys:
+    deviceUsernameKey: OXIDIZED_DEVICE_USERNAME
+    devicePasswordKey: OXIDIZED_DEVICE_PASSWORD
+    netboxApiTokenKey: NETBOX_API_TOKEN
+    readonlyDeviceUsernameKey: OXIDIZED_READONLY_DEVICE_USERNAME
+    readonlyDevicePasswordKey: OXIDIZED_READONLY_DEVICE_PASSWORD
+    # Additional init-container environment variables mapped to keys in the
+    # same Secret. Use __ENVIRONMENT_NAME__ in any string config field.
+    extra: {}
+  data:
+    deviceUsername: ""
+    devicePassword: ""
+    netboxApiToken: ""
+    readonlyDeviceUsername: ""
+    readonlyDevicePassword: ""
+    # Values for secretKeys.extra when create=true, keyed by environment name.
+    # Production deployments should leave this empty and use existingSecret.
+    extra: {}
+
+# Optional disruption budget. It is disabled for the default single replica.
+pdb:
+  create: false
+  minAvailable: 1
+  maxUnavailable: ""
+
+# NetworkPolicy is opt-in because Oxidized must reach network devices and
+# external source/output systems. An empty ingress.from with
+# fromAllNamespaces=false denies all ingress instead of allowing all.
+networkPolicy:
+  enabled: false
+  ingress:
+    enabled: false
+    fromAllNamespaces: true
+    from: []
+  egress:
+    enabled: false
+    cidr: 0.0.0.0/0
+    ports:
+      - protocol: TCP
+        port: 22
+      - protocol: TCP
+        port: 80
+      - protocol: TCP
+        port: 443
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: oxidized.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Oxidized configuration fields.
+# Fixed parameters are always rendered. Optional sections use `enabled` flags.
+# Sensitive values stay as placeholders and are replaced at runtime from
+# `runtimeSecret` by the init container.
+config:
+  # Name of an existing ConfigMap containing the `config` key. When set, this
+  # chart will not create the Oxidized ConfigMap.
+  existingConfigmap: ""
+  # Full Oxidized configuration override. Similar to Bitnami PostgreSQL
+  # `primary.configuration`; when set, it replaces the field-generated default.
+  configuration: ""
+  # Core options are always rendered into the Oxidized config file.
+  # Credentials are placeholders; the init container replaces them with values
+  # read from `runtimeSecret`.
+  core:
+    # Default network device username placeholder.
+    usernamePlaceholder: "__OXIDIZED_DEVICE_USERNAME__"
+    # Default network device password placeholder.
+    passwordPlaceholder: "__OXIDIZED_DEVICE_PASSWORD__"
+    # Fallback model used when a source does not provide one.
+    model: ios
+    # Poll interval in seconds. Set to 0 to disable periodic fetches.
+    interval: 3600
+    # Enable legacy syslog logging flag.
+    useSyslog: false
+    # Optional log file path. Empty means omit `log`.
+    log: ""
+    # Debug mode. If true, Oxidized also raises logger verbosity.
+    debug: false
+    # Maximum worker threads.
+    threads: 30
+    # If false, Oxidized chooses active thread count based on interval.
+    useMaxThreads: false
+    # Per-operation timeout in seconds.
+    timeout: 60
+    # Maximum total fetch time in seconds.
+    timelimit: 300
+    # Retry count before marking a fetch failed.
+    retries: 3
+    # Device prompt regexp rendered as `!ruby/regexp`.
+    prompt: '/^([\w.@-]+[#>]\s?)$/'
+    # Add a job immediately when a node is moved to the front of the queue.
+    nextAddsJob: false
+    # Whether node names should be DNS-resolved.
+    resolveDns: true
+    # PID file path.
+    pid: /home/oxidized/.config/oxidized/pid
+
+  # Global vars block. These can also be overridden per model, group, or node.
+  vars:
+    # Optional privileged-mode enable password.
+    enable:
+      enabled: false
+      value: ""
+    # Strip secrets from stored configs when supported by the model.
+    removeSecret: true
+    # SSH input variables are global Oxidized vars, even though they configure
+    # the SSH input implementation.
+    authMethods:
+      - none
+      - publickey
+      - password
+    # Optional SSH key paths for device authentication.
+    sshKeys: []
+    sshNoExec: false
+    sshNoKeepalive: false
+    # Add legacy algorithms only for devices that require them.
+    sshKex: []
+    sshEncryption: []
+    sshHmac: []
+    # Add metadata headers/footers to stored configs.
+    metadata:
+      enabled: false
+      value: true
+      top: "%{comment}Fetched by Oxidized with model %{model} from host %{name} [%{ip}]\n"
+      bottom: ""
+    # Store only significant configuration changes when the model supports it.
+    outputStoreMode:
+      enabled: false
+      value: on_significant
+    # Extra global vars rendered as snake_case keys.
+    extra: {}
+
+  # Optional group alias mapping, including regexp keys when needed.
+  groupMap: {}
+
+  # Optional SemanticLogger configuration.
+  logger:
+    enabled: false
+    level: ":info"
+    # Example appender:
+    # - type: stdout
+    #   level: :info
+    appenders: []
+
+  # Crash dump settings.
+  crash:
+    directory: /home/oxidized/.config/oxidized/crashes
+    hostnames: false
+
+  # Runtime statistics settings.
+  stats:
+    historySize: 10
+
+  # Input modules. `default` should reference enabled inputs.
+  input:
+    default: "ssh"
+    debug: false
+    utf8Encoded: true
+    # SSH input configuration.
+    ssh:
+      enabled: true
+      secure: true
+    # Telnet input. Disabled by default.
+    telnet:
+      enabled: false
+
+  # Output modules. `default` should reference one enabled output.
+  output:
+    default: git
+    # Remove configs for nodes no longer present in the active source.
+    cleanObsoleteNodes: true
+    # Git output backed by rugged/libgit2.
+    git:
+      enabled: true
+      user: Oxidized
+      email: oxidized@example.com
+      repo: /home/oxidized/.config/oxidized/oxidized.git
+      singleRepo: true
+    # File output stores one config file per device.
+    file:
+      enabled: false
+      directory: /home/oxidized/.config/oxidized/configs
+    # HTTP output POSTs config JSON to an external endpoint.
+    http:
+      enabled: false
+      url: ""
+      user: ""
+      password: ""
+      sslVerify: true
+      headers: {}
+
+  # Hooks run on Oxidized events. Enable only the hooks you need.
+  hooks:
+    # Push stored Git changes to a remote repository.
+    githubrepo:
+      enabled: false
+      type: githubrepo
+      events:
+        - post_store
+      remoteRepo: ""
+      privateKey: /home/oxidized/.ssh/id_rsa
+      publicKey: /home/oxidized/.ssh/id_rsa.pub
+    # Execute a local command on matching events.
+    exec:
+      enabled: false
+      type: exec
+      events:
+        - node_success
+      cmd: ""
+      timeout: 60
+      async: false
+    # Send diffs to Slack.
+    slackdiff:
+      enabled: false
+      type: slackdiff
+      events:
+        - post_store
+      token: ""
+      channel: ""
+    # Send diffs to XMPP rooms.
+    xmppdiff:
+      enabled: false
+      type: xmppdiff
+      events:
+        - post_store
+      jid: ""
+      password: ""
+      channel: ""
+      nick: oxidized
+
+  # Source modules. `default` should reference one enabled source.
+  source:
+    default: csv
+    # CSV source, often backed by router.db.
+    csv:
+      enabled: true
+      # Required when CSV is the default source. With the default map, use one
+      # `name:model` record per line; extend `map` before adding more columns.
+      routerDb: ""
+      file: /home/oxidized/.config/oxidized/router.db
+      # Accepts either a plain delimiter string or !ruby/regexp /pattern/flags.
+      delimiter: "!ruby/regexp /:/"
+      gpg: false
+      gpgPassword: ""
+      map:
+        name: 0
+        model: 1
+      varsMap: {}
+    # HTTP source. Set a non-empty URL before enabling it.
+    http:
+      enabled: false
+      url: ""
+      secure: true
+      user: ""
+      pass: ""
+      readTimeout: 120
+      pagination: false
+      paginationKeyName: next
+      hostsLocation: results
+      headers: {}
+      map:
+        name: name
+        ip: primary_ip.address
+        model: platform.slug
+        group: platform.slug
+      varsMap: {}
+    # SQL source using the sequel gem.
+    sql:
+      enabled: false
+      adapter: sqlite
+      host: ""
+      database: /home/oxidized/.config/oxidized/router.db
+      table: nodes
+      user: ""
+      password: ""
+      query: ""
+      withSsl: false
+      sslMode: ""
+      sslCa: ""
+      sslCert: ""
+      sslKey: ""
+      map:
+        name: name
+        model: model
+      varsMap: {}
+    # JSON file source.
+    jsonfile:
+      enabled: false
+      file: /home/oxidized/.config/oxidized/router.json
+      gpg: false
+      gpgPassword: ""
+      map:
+        name: name
+        model: model
+      varsMap: {}
+
+  # Optional source-to-Oxidized model aliases and per-group/model overrides.
+  modelMap: {}
+  groups: {}
+  models: {}

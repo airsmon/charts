@@ -1,0 +1,46 @@
+{{- if .Values.web.enabled }}
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations .Values.service.annotations -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "oxidized.fullname" . | quote }}
+  namespace: {{ include "oxidized.namespace" . | quote }}
+  labels:
+    {{- include "oxidized.labels" . | nindent 4 }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type | quote }}
+  {{- with .Values.service.clusterIP }}
+  clusterIP: {{ . | quote }}
+  {{- end }}
+  {{- if eq .Values.service.type "LoadBalancer" }}
+  {{- with .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- if or (eq .Values.service.type "LoadBalancer") (eq .Values.service.type "NodePort") }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy | quote }}
+  {{- end }}
+  sessionAffinity: {{ .Values.service.sessionAffinity | quote }}
+  {{- with .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    {{- include "oxidized.workloadSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      {{- if and (or (eq .Values.service.type "LoadBalancer") (eq .Values.service.type "NodePort")) .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+{{- end }}
