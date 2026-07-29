@@ -1,0 +1,371 @@
+{{- $runtimeSecretKeys := .Values.runtimeSecret.secretKeys -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "oxidized.fullname" . | quote }}
+  namespace: {{ include "oxidized.namespace" . | quote }}
+  labels:
+    {{- include "oxidized.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "oxidized.workloadSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "oxidized.labels" . | nindent 8 }}
+        app.kubernetes.io/component: "server"
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.podAnnotations (not .Values.config.existingConfigmap) (and .Values.runtimeSecret.enabled .Values.runtimeSecret.create (not .Values.runtimeSecret.existingSecret)) (and .Values.sshSecret.enabled .Values.sshSecret.create (not .Values.sshSecret.existingSecret)) }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if not .Values.config.existingConfigmap }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if and .Values.runtimeSecret.enabled .Values.runtimeSecret.create (not .Values.runtimeSecret.existingSecret) }}
+        checksum/runtime-secret: {{ include (print $.Template.BasePath "/secret-runtime.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if and .Values.sshSecret.enabled .Values.sshSecret.create (not .Values.sshSecret.existingSecret) }}
+        checksum/ssh-secret: {{ include (print $.Template.BasePath "/secret-ssh.yaml") . | sha256sum }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "oxidized.serviceAccountName" . | quote }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- $imagePullSecrets := include "oxidized.imagePullSecrets" . | trim }}
+      {{- if $imagePullSecrets }}
+      imagePullSecrets:
+        {{- $imagePullSecrets | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- if .Values.podSecurityContext.enabled }}
+      securityContext:
+        {{- omit .Values.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: prepare-configuration
+          image: {{ include "oxidized.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              cp /config-template/config /config-rendered/config
+              ruby -ryaml <<'RUBY'
+              tokens = {
+                "__OXIDIZED_DEVICE_USERNAME__" => "OXIDIZED_DEVICE_USERNAME",
+                "__OXIDIZED_DEVICE_PASSWORD__" => "OXIDIZED_DEVICE_PASSWORD",
+                "__OXIDIZED_DEFAULT_USERNAME__" => "OXIDIZED_DEVICE_USERNAME",
+                "__OXIDIZED_DEFAULT_PASSWORD__" => "OXIDIZED_DEVICE_PASSWORD",
+                "__NETBOX_API_TOKEN__" => "NETBOX_API_TOKEN",
+                "__OXIDIZED_READONLY_DEVICE_USERNAME__" => "OXIDIZED_READONLY_DEVICE_USERNAME",
+                "__OXIDIZED_READONLY_DEVICE_PASSWORD__" => "OXIDIZED_READONLY_DEVICE_PASSWORD",
+                "__OXIDIZED_READONLY_USERNAME__" => "OXIDIZED_READONLY_DEVICE_USERNAME",
+                "__OXIDIZED_READONLY_PASSWORD__" => "OXIDIZED_READONLY_DEVICE_PASSWORD",
+                {{- range $environmentName, $_ := $runtimeSecretKeys.extra }}
+                "__{{ $environmentName }}__" => "{{ $environmentName }}",
+                {{- end }}
+              }
+              replacements = {}
+              tokens.each do |token, environment_name|
+                replacements[token] = ENV.fetch(environment_name) if ENV.key?(environment_name)
+              end
+              transform = lambda do |value|
+                case value
+                when String
+                  next value if replacements.empty?
+                  value.gsub(Regexp.union(replacements.keys)) do |token|
+                    replacements.fetch(token)
+                  end
+                when Array
+                  value.map { |item| transform.call(item) }
+                when Hash
+                  value.each_with_object({}) do |(key, item), result|
+                    result[key] = transform.call(item)
+                  end
+                else
+                  value
+                end
+              end
+              config = YAML.safe_load(
+                File.read("/config-rendered/config"),
+                permitted_classes: [Regexp, Symbol],
+                aliases: true
+              )
+              referenced_tokens = []
+              collect_tokens = lambda do |value|
+                case value
+                when String
+                  referenced_tokens.concat(
+                    value.scan(/__OXIDIZED_[A-Z][A-Z0-9_]*__/)
+                  )
+                when Array
+                  value.each { |item| collect_tokens.call(item) }
+                when Hash
+                  value.each_value { |item| collect_tokens.call(item) }
+                end
+              end
+              collect_tokens.call(config)
+              unknown_tokens = referenced_tokens.uniq - tokens.keys
+              unless unknown_tokens.empty?
+                abort(
+                  "unmapped runtime Secret placeholders: " \
+                  "#{unknown_tokens.sort.join(', ')}"
+                )
+              end
+              File.write("/config-rendered/config", YAML.dump(transform.call(config)))
+              RUBY
+              umask 0002
+              if [ -f /config-template/router.db ]; then
+                cp /config-template/router.db /data/router.db
+              else
+                touch /data/router.db
+              fi
+              chmod 640 /config-rendered/config
+              {{- if .Values.sshSecret.enabled }}
+              if [ -f /ssh-secret/id_rsa ]; then
+                cp /ssh-secret/id_rsa /ssh-work/id_rsa
+                chmod 600 /ssh-work/id_rsa
+              fi
+              if [ -f /ssh-secret/id_rsa.pub ]; then
+                cp /ssh-secret/id_rsa.pub /ssh-work/id_rsa.pub
+                chmod 644 /ssh-work/id_rsa.pub
+              fi
+              if [ -f /ssh-secret/known_hosts ]; then
+                cp /ssh-secret/known_hosts /ssh-work/known_hosts
+                chmod 640 /ssh-work/known_hosts
+              fi
+              {{- end }}
+          {{- if .Values.runtimeSecret.enabled }}
+          env:
+            - name: OXIDIZED_DEVICE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oxidized.runtimeSecretName" . | quote }}
+                  key: {{ $runtimeSecretKeys.deviceUsernameKey | quote }}
+            - name: OXIDIZED_DEVICE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oxidized.runtimeSecretName" . | quote }}
+                  key: {{ $runtimeSecretKeys.devicePasswordKey | quote }}
+            - name: NETBOX_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oxidized.runtimeSecretName" . | quote }}
+                  key: {{ $runtimeSecretKeys.netboxApiTokenKey | quote }}
+                  optional: true
+            - name: OXIDIZED_READONLY_DEVICE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oxidized.runtimeSecretName" . | quote }}
+                  key: {{ $runtimeSecretKeys.readonlyDeviceUsernameKey | quote }}
+                  optional: true
+            - name: OXIDIZED_READONLY_DEVICE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oxidized.runtimeSecretName" . | quote }}
+                  key: {{ $runtimeSecretKeys.readonlyDevicePasswordKey | quote }}
+                  optional: true
+            {{- range $environmentName, $secretKey := $runtimeSecretKeys.extra }}
+            - name: {{ $environmentName | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oxidized.runtimeSecretName" $ | quote }}
+                  key: {{ $secretKey | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.initContainerSecurityContext.enabled }}
+          securityContext:
+            {{- omit .Values.initContainerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config-template
+              mountPath: /config-template
+              readOnly: true
+            - name: config-rendered
+              mountPath: /config-rendered
+            - name: data
+              mountPath: /data
+            - name: ssh-dir
+              mountPath: /ssh-work
+            {{- if .Values.sshSecret.enabled }}
+            - name: ssh-secret
+              mountPath: /ssh-secret
+              readOnly: true
+            {{- end }}
+        {{- with .Values.initContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+        - name: oxidized
+          image: {{ include "oxidized.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          {{- with .Values.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.web.enabled }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.port }}
+              protocol: TCP
+          {{- end }}
+          env:
+            - name: CONFIG_RELOAD_INTERVAL
+              {{- if and .Values.web.enabled (eq (int .Values.web.port) 8888) (not .Values.web.urlPrefix) (or (empty .Values.web.vhosts) (has "localhost" .Values.web.vhosts)) }}
+              value: {{ .Values.configReloadInterval | quote }}
+              {{- else }}
+              # The upstream reload helper calls localhost:8888 directly.
+              value: ""
+              {{- end }}
+            {{- with .Values.extraEnvVars }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.containerSecurityContext.enabled }}
+          securityContext:
+            {{- omit .Values.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /home/oxidized/.config/oxidized
+            - name: config-rendered
+              mountPath: /home/oxidized/.config/oxidized/config
+              subPath: config
+            - name: ssh-dir
+              mountPath: /home/oxidized/.ssh
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.lifecycleHooks }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.customStartupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- else }}
+          {{- if and $.Values.web.enabled $.Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ $.Values.startupProbe.path | quote }}
+              port: http
+              {{- with first $.Values.web.vhosts }}
+              httpHeaders:
+                - name: Host
+                  value: {{ . | quote }}
+              {{- end }}
+            initialDelaySeconds: {{ $.Values.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ $.Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ $.Values.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ $.Values.startupProbe.failureThreshold }}
+            successThreshold: {{ $.Values.startupProbe.successThreshold }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.customReadinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- else }}
+          {{- if and $.Values.web.enabled $.Values.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ $.Values.readinessProbe.path | quote }}
+              port: http
+              {{- with first $.Values.web.vhosts }}
+              httpHeaders:
+                - name: Host
+                  value: {{ . | quote }}
+              {{- end }}
+            initialDelaySeconds: {{ $.Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ $.Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ $.Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ $.Values.readinessProbe.failureThreshold }}
+            successThreshold: {{ $.Values.readinessProbe.successThreshold }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.customLivenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- else }}
+          {{- if and $.Values.web.enabled $.Values.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ $.Values.livenessProbe.path | quote }}
+              port: http
+              {{- with first $.Values.web.vhosts }}
+              httpHeaders:
+                - name: Host
+                  value: {{ . | quote }}
+              {{- end }}
+            initialDelaySeconds: {{ $.Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ $.Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ $.Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ $.Values.livenessProbe.failureThreshold }}
+            successThreshold: {{ $.Values.livenessProbe.successThreshold }}
+          {{- end }}
+          {{- end }}
+        {{- with .Values.sidecars }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        {{- if .Values.sshSecret.enabled }}
+        - name: ssh-secret
+          secret:
+            secretName: {{ include "oxidized.sshSecretName" . | quote }}
+        {{- end }}
+        - name: ssh-dir
+          emptyDir: {}
+        - name: config-template
+          configMap:
+            name: {{ include "oxidized.configMapName" . | quote }}
+        - name: config-rendered
+          emptyDir: {}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "oxidized.pvcName" . | quote }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

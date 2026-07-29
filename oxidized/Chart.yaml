@@ -1,0 +1,28 @@
+apiVersion: v2
+name: oxidized
+description: Deploy Oxidized network device configuration backups on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.36.0"
+kubeVersion: ">=1.23.0-0"
+home: https://github.com/ytti/oxidized
+sources:
+  - https://github.com/ytti/oxidized
+keywords:
+  - backup
+  - networking
+  - oxidized
+  - network-backup
+  - network-automation
+  - configuration-backup
+annotations:
+  category: Infrastructure
+  images: |
+    - name: oxidized
+      image: docker.io/oxidized/oxidized:0.36.0
+    - name: test
+      image: docker.io/library/busybox:1.36
+  licenses: Apache-2.0
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial production-oriented Oxidized Helm chart.

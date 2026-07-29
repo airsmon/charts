@@ -1,0 +1,16 @@
+config:
+  input:
+    ssh:
+      secure: false
+  source:
+    csv:
+      routerDb: router.example.internal:ios
+
+runtimeSecret:
+  enabled: false
+
+networkPolicy:
+  enabled: true
+  egress:
+    enabled: true
+    ports: []

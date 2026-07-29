@@ -1,0 +1,30 @@
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations .Values.persistence.annotations -}}
+{{- if .Values.persistence.resourcePolicy -}}
+{{- $_ := set $annotations "helm.sh/resource-policy" .Values.persistence.resourcePolicy -}}
+{{- end -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "oxidized.pvcName" . | quote }}
+  namespace: {{ include "oxidized.namespace" . | quote }}
+  labels:
+    {{- include "oxidized.labels" . | nindent 4 }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  {{- with include "oxidized.storageClass" . }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with .Values.persistence.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}

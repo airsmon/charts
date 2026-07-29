@@ -1,0 +1,26 @@
+{{- if .Values.pdb.create }}
+{{- $minAvailableSet := ne (toString .Values.pdb.minAvailable) "" }}
+{{- $maxUnavailableSet := ne (toString .Values.pdb.maxUnavailable) "" }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "oxidized.fullname" . | quote }}
+  namespace: {{ include "oxidized.namespace" . | quote }}
+  labels:
+    {{- include "oxidized.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $minAvailableSet }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  {{- else if $maxUnavailableSet }}
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  {{- else }}
+  maxUnavailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "oxidized.workloadSelectorLabels" . | nindent 6 }}
+{{- end }}
