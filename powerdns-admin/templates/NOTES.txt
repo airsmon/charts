@@ -1,0 +1,17 @@
+PowerDNS-Admin {{ .Chart.AppVersion }} was rendered for release
+{{ .Release.Name }} in namespace {{ include "powerdns-admin.namespace" . }}.
+
+The chart did not create credentials. Confirm these existing Secrets are
+present before the workload starts:
+
+  - {{ .Values.runtimeSecret.existingSecret }}
+  - {{ .Values.database.existingSecret }}
+
+Migration mode: {{ .Values.migration.mode }}
+Bundled PostgreSQL: {{ ternary "enabled" "disabled" .Values.postgresql.enabled }}
+
+{{- if .Values.route.enabled }}
+URL: {{ .Values.config.siteUrl }}
+{{- else }}
+The optional Istio/cert-manager route is disabled.
+{{- end }}

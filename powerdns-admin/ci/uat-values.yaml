@@ -1,0 +1,33 @@
+config:
+  siteUrl: https://powerdns-admin.uat.infra.daocloud.io
+  csrfCookieSecure: true
+  hstsEnabled: true
+  serverExternalSsl: true
+  sessionCookieSecure: true
+  signupEnabled: false
+
+migration:
+  mode: argocdHook
+
+postgresql:
+  persistence:
+    storageClass: longhorn
+    size: 10Gi
+
+networkPolicy:
+  enabled: true
+  web:
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: istio-system
+
+route:
+  enabled: true
+  host: powerdns-admin.uat.infra.daocloud.io
+  gateway:
+    resourceNamespace: istio-system
+    workloadNamespace: istio-system
+  tls:
+    certificate:
+      namespace: istio-system

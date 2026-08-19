@@ -1,0 +1,25 @@
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations .Values.service.annotations -}}
+{{- if eq .Values.migration.mode "argocdHook" -}}
+{{- $_ := set $annotations "argocd.argoproj.io/sync-wave" "0" -}}
+{{- end -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "powerdns-admin.fullname" . | quote }}
+  namespace: {{ include "powerdns-admin.namespace" . | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "web"
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type | quote }}
+  selector:
+    {{- include "powerdns-admin.webSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP

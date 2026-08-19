@@ -1,0 +1,97 @@
+{{- if .Values.route.enabled }}
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations -}}
+{{- if eq .Values.migration.mode "argocdHook" -}}
+{{- $_ := set $annotations "argocd.argoproj.io/sync-wave" "10" -}}
+{{- end -}}
+{{- if and .Values.route.gateway.create .Values.route.tls.enabled .Values.route.tls.certificate.create }}
+{{- $certificateAnnotations := deepCopy $annotations -}}
+{{- if eq .Values.migration.mode "argocdHook" -}}
+{{- $_ := set $certificateAnnotations "argocd.argoproj.io/sync-wave" "5" -}}
+{{- end -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "powerdns-admin.suffixedName" (dict "context" . "suffix" "tls") | quote }}
+  namespace: {{ .Values.route.tls.certificate.namespace | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "ingress"
+  {{- with $certificateAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  secretName: {{ include "powerdns-admin.tlsSecretName" . | quote }}
+  issuerRef:
+    kind: {{ .Values.route.tls.certificate.issuerRef.kind | quote }}
+    name: {{ .Values.route.tls.certificate.issuerRef.name | quote }}
+  dnsNames:
+    - {{ .Values.route.host | quote }}
+---
+{{- end }}
+{{- if .Values.route.gateway.create }}
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "powerdns-admin.gatewayName" . | quote }}
+  namespace: {{ .Values.route.gateway.resourceNamespace | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "ingress"
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    {{- toYaml .Values.route.gateway.selector | nindent 4 }}
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - {{ .Values.route.host | quote }}
+      {{- if .Values.route.http.redirectToHttps }}
+      tls:
+        httpsRedirect: true
+      {{- end }}
+    {{- if .Values.route.tls.enabled }}
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - {{ .Values.route.host | quote }}
+      tls:
+        mode: SIMPLE
+        credentialName: {{ include "powerdns-admin.tlsSecretName" . | quote }}
+    {{- end }}
+---
+{{- end }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "powerdns-admin.fullname" . | quote }}
+  namespace: {{ include "powerdns-admin.namespace" . | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "ingress"
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  hosts:
+    - {{ .Values.route.host | quote }}
+  gateways:
+    - {{ printf "%s/%s" .Values.route.gateway.resourceNamespace (include "powerdns-admin.gatewayName" .) | quote }}
+  http:
+    - name: powerdns-admin
+      route:
+        - destination:
+            host: {{ printf "%s.%s.svc.cluster.local" (include "powerdns-admin.fullname" .) (include "powerdns-admin.namespace" .) | quote }}
+            port:
+              number: {{ .Values.service.port }}
+      timeout: {{ .Values.route.http.timeout | quote }}
+{{- end }}

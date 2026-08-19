@@ -1,0 +1,26 @@
+apiVersion: v2
+name: powerdns-admin
+description: Deploy PowerDNS-Admin with an optional dedicated PostgreSQL database
+type: application
+version: 0.1.0
+appVersion: "0.6.1"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/PowerDNS-Admin/PowerDNS-Admin
+sources:
+  - https://github.com/PowerDNS-Admin/PowerDNS-Admin
+keywords:
+  - dns
+  - powerdns
+  - powerdns-admin
+  - administration
+annotations:
+  category: Infrastructure
+  images: |
+    - name: powerdns-admin
+      image: docker.io/powerdnsadmin/pda-legacy:v0.6.1@sha256:5741b1f877210878f02923dd45346c7016acefc7eac9b14e90229f94e4c726c4
+    - name: postgresql
+      image: docker.io/library/postgres:17.10-alpine3.22@sha256:b02d9b5bcf608c2719da32cdabee274a33841202487fd5dc9b065b63f886753f
+  licenses: Apache-2.0
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial PowerDNS-Admin chart with optional dedicated PostgreSQL.

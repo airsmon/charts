@@ -1,0 +1,175 @@
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations -}}
+{{- if eq .Values.migration.mode "argocdHook" -}}
+{{- $_ := set $annotations "argocd.argoproj.io/sync-wave" "0" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "powerdns-admin.fullname" . | quote }}
+  namespace: {{ include "powerdns-admin.namespace" . | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "web"
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "powerdns-admin.webSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "powerdns-admin.labels" . | nindent 8 }}
+        app.kubernetes.io/component: "web"
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "powerdns-admin.serviceAccountName" . | quote }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- $imagePullSecrets := include "powerdns-admin.imagePullSecrets" . | trim }}
+      {{- if $imagePullSecrets }}
+      imagePullSecrets:
+        {{- $imagePullSecrets | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- if .Values.podSecurityContext.enabled }}
+      securityContext:
+        {{- omit .Values.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      {{- end }}
+      {{- if and .Values.postgresql.enabled (eq .Values.migration.mode "entrypoint") }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: {{ include "powerdns-admin.postgresqlImage" . | quote }}
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | quote }}
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              attempt=0
+              until pg_isready \
+                -h {{ printf "%s.%s.svc.cluster.local" (include "powerdns-admin.postgresqlName" .) (include "powerdns-admin.namespace" .) | quote }} \
+                -U "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.username }})" \
+                -d "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.database }})"; do
+                attempt=$((attempt + 1))
+                if [ "${attempt}" -ge 150 ]; then
+                  echo "PostgreSQL did not become ready within 300 seconds" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          {{- if .Values.postgresql.containerSecurityContext.enabled }}
+          securityContext:
+            {{- omit .Values.postgresql.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: database-secret
+              mountPath: /var/run/secrets/powerdns-admin/database
+              readOnly: true
+      {{- end }}
+      containers:
+        - name: powerdns-admin
+          image: {{ include "powerdns-admin.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          {{- if eq .Values.migration.mode "entrypoint" }}
+          args:
+            - gunicorn
+            - powerdnsadmin:create_app()
+            - --workers={{ .Values.config.gunicorn.workers }}
+            - --timeout={{ .Values.config.gunicorn.timeout }}
+            - --bind={{ .Values.config.gunicorn.bindAddress }}
+            - --log-level={{ .Values.config.gunicorn.logLevel }}
+            - --access-logfile=-
+            - --error-logfile=-
+          {{- else }}
+          command:
+            - /opt/venv/bin/gunicorn
+          args:
+            - powerdnsadmin:create_app()
+            - --workers={{ .Values.config.gunicorn.workers }}
+            - --timeout={{ .Values.config.gunicorn.timeout }}
+            - --bind={{ .Values.config.gunicorn.bindAddress }}
+            - --log-level={{ .Values.config.gunicorn.logLevel }}
+            - --access-logfile=-
+            - --error-logfile=-
+          {{- end }}
+          env:
+            {{- include "powerdns-admin.configEnv" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.startupProbe.path | quote }}
+              port: http
+              scheme: HTTP
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.path | quote }}
+              port: http
+              scheme: HTTP
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessProbe.path | quote }}
+              port: http
+              scheme: HTTP
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.containerSecurityContext.enabled }}
+          securityContext:
+            {{- omit .Values.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "powerdns-admin.secretVolumeMounts" . | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- include "powerdns-admin.secretVolumes" . | nindent 8 }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpVolume.sizeLimit }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

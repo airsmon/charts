@@ -49,6 +49,7 @@ helm upgrade --install my-release ./chart-name \
 |---|---|---:|---:|---|
 | [fortigate-exporter](fortigate-exporter/README.md) | Monitoring | `0.4.0` | `1.25.0` | 部署 `fortigate_exporter`，并集成 Prometheus Operator、告警规则和 Grafana Dashboard |
 | [oxidized](oxidized/README.md) | Infrastructure | `0.1.0` | `0.36.0` | 网络设备配置采集、Git 版本化与备份 |
+| [powerdns-admin](powerdns-admin/README.md) | Infrastructure | `0.1.0` | `0.6.1` | PowerDNS 管理界面、可选独立 PostgreSQL、Argo CD 迁移与 Istio 路由 |
 
 Chart 的安装前提、values 参数、Secret 创建方式、升级说明和完整示例以各自
 README 为准。
@@ -99,6 +100,7 @@ make validate
 # 验证单个 Chart
 make validate-fortigate-exporter
 make validate-oxidized
+make validate-powerdns-admin
 
 # 将全部 Charts 打包到 dist/
 make package

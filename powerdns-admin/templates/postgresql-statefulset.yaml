@@ -1,0 +1,158 @@
+{{- if .Values.postgresql.enabled }}
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations -}}
+{{- if eq .Values.migration.mode "argocdHook" -}}
+{{- $_ := set $annotations "argocd.argoproj.io/sync-wave" "-20" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "powerdns-admin.postgresqlName" . | quote }}
+  namespace: {{ include "powerdns-admin.namespace" . | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "database"
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: {{ include "powerdns-admin.postgresqlName" . | quote }}
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      {{- include "powerdns-admin.postgresqlSelectorLabels" . | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        {{- include "powerdns-admin.labels" . | nindent 8 }}
+        app.kubernetes.io/component: "database"
+        {{- with .Values.postgresql.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.postgresql.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "powerdns-admin.serviceAccountName" . | quote }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.postgresql.terminationGracePeriodSeconds }}
+      {{- $imagePullSecrets := include "powerdns-admin.imagePullSecrets" . | trim }}
+      {{- if $imagePullSecrets }}
+      imagePullSecrets:
+        {{- $imagePullSecrets | nindent 8 }}
+      {{- end }}
+      {{- if .Values.postgresql.podSecurityContext.enabled }}
+      securityContext:
+        {{- omit .Values.postgresql.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgresql
+          image: {{ include "powerdns-admin.postgresqlImage" . | quote }}
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | quote }}
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_USER_FILE
+              value: /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.username }}
+            - name: POSTGRES_PASSWORD_FILE
+              value: /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.password }}
+            - name: POSTGRES_DB_FILE
+              value: /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.database }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - pg_isready -h 127.0.0.1 -U "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.username }})" -d "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.database }})"
+            periodSeconds: {{ .Values.postgresql.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.postgresql.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.postgresql.startupProbe.failureThreshold }}
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - pg_isready -h 127.0.0.1 -U "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.username }})" -d "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.database }})"
+            periodSeconds: {{ .Values.postgresql.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.postgresql.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.postgresql.readinessProbe.failureThreshold }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - pg_isready -h 127.0.0.1 -U "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.username }})" -d "$(cat /var/run/secrets/powerdns-admin/database/{{ .Values.database.keys.database }})"
+            periodSeconds: {{ .Values.postgresql.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.postgresql.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.postgresql.livenessProbe.failureThreshold }}
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          {{- if .Values.postgresql.containerSecurityContext.enabled }}
+          securityContext:
+            {{- omit .Values.postgresql.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: database-secret
+              mountPath: /var/run/secrets/powerdns-admin/database
+              readOnly: true
+            - name: postgresql-runtime
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: database-secret
+          secret:
+            secretName: {{ .Values.database.existingSecret | quote }}
+            defaultMode: 0440
+        - name: postgresql-runtime
+          emptyDir:
+            sizeLimit: {{ .Values.postgresql.runtimeVolume.sizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.postgresql.tmpVolume.sizeLimit }}
+      {{- with .Values.postgresql.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgresql.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "powerdns-admin.labels" . | nindent 10 }}
+          app.kubernetes.io/component: "database"
+        {{- with .Values.postgresql.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.postgresql.persistence.accessModes | nindent 10 }}
+        {{- with include "powerdns-admin.postgresqlStorageClass" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size }}
+{{- end }}
