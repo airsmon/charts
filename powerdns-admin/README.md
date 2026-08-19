@@ -115,7 +115,7 @@ writes.
 postgresql:
   enabled: true
   persistence:
-    storageClass: longhorn
+    storageClass: example-storage
     size: 10Gi
 ```
 
@@ -234,7 +234,7 @@ config:
   serverExternalSsl: true
   sessionCookieSecure: true
   signupEnabled: false
-  siteUrl: https://powerdns-admin.uat.infra.daocloud.io
+  siteUrl: https://powerdns-admin.uat.example.internal
 ```
 
 ## Optional route
@@ -249,11 +249,11 @@ config:
   serverExternalSsl: true
   sessionCookieSecure: true
   signupEnabled: false
-  siteUrl: https://powerdns-admin.uat.infra.daocloud.io
+  siteUrl: https://powerdns-admin.uat.example.internal
 
 route:
   enabled: true
-  host: powerdns-admin.uat.infra.daocloud.io
+  host: powerdns-admin.uat.example.internal
   gateway:
     create: true
     resourceNamespace: istio-system
