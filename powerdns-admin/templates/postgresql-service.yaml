@@ -1,0 +1,28 @@
+{{- if .Values.postgresql.enabled }}
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations -}}
+{{- if eq .Values.migration.mode "argocdHook" -}}
+{{- $_ := set $annotations "argocd.argoproj.io/sync-wave" "-30" -}}
+{{- end -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "powerdns-admin.postgresqlName" . | quote }}
+  namespace: {{ include "powerdns-admin.namespace" . | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "database"
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    {{- include "powerdns-admin.postgresqlSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+      protocol: TCP
+{{- end }}

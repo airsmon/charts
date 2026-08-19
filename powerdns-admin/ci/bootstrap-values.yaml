@@ -1,0 +1,16 @@
+# First-install profile for an empty application database. Keep the route and
+# NetworkPolicy disabled, use kubectl port-forward, register the first
+# Administrator, and then switch to the steady environment profile.
+config:
+  csrfCookieSecure: false
+  hstsEnabled: false
+  serverExternalSsl: false
+  sessionCookieSecure: false
+  signupEnabled: true
+  siteUrl: http://127.0.0.1:8080
+
+route:
+  enabled: false
+
+networkPolicy:
+  enabled: false

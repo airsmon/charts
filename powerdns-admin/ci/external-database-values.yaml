@@ -1,0 +1,5 @@
+database:
+  existingSecret: powerdns-admin-external-database
+
+postgresql:
+  enabled: false

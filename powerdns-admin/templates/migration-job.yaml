@@ -1,0 +1,78 @@
+{{- if eq .Values.migration.mode "argocdHook" }}
+{{- $annotations := mergeOverwrite (dict) .Values.commonAnnotations -}}
+{{- $_ := set $annotations "argocd.argoproj.io/hook" "Sync" -}}
+{{- $_ := set $annotations "argocd.argoproj.io/sync-wave" "-10" -}}
+{{- $_ := set $annotations "argocd.argoproj.io/hook-delete-policy" "BeforeHookCreation,HookSucceeded" -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "powerdns-admin.migrationName" . | quote }}
+  namespace: {{ include "powerdns-admin.namespace" . | quote }}
+  labels:
+    {{- include "powerdns-admin.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "migration"
+  annotations:
+    {{- toYaml $annotations | nindent 4 }}
+spec:
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        {{- include "powerdns-admin.labels" . | nindent 8 }}
+        app.kubernetes.io/component: "migration"
+    spec:
+      serviceAccountName: {{ include "powerdns-admin.serviceAccountName" . | quote }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      enableServiceLinks: false
+      restartPolicy: Never
+      {{- $imagePullSecrets := include "powerdns-admin.imagePullSecrets" . | trim }}
+      {{- if $imagePullSecrets }}
+      imagePullSecrets:
+        {{- $imagePullSecrets | nindent 8 }}
+      {{- end }}
+      {{- if .Values.podSecurityContext.enabled }}
+      securityContext:
+        {{- omit .Values.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "powerdns-admin.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          command:
+            - /opt/venv/bin/flask
+          args:
+            - db
+            - upgrade
+          env:
+            {{- include "powerdns-admin.configEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          {{- if .Values.containerSecurityContext.enabled }}
+          securityContext:
+            {{- omit .Values.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "powerdns-admin.secretVolumeMounts" . | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- include "powerdns-admin.secretVolumes" . | nindent 8 }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

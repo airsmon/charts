@@ -1,0 +1,258 @@
+# Global image and storage overrides. A non-empty global registry takes
+# precedence over image-specific registries.
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  defaultStorageClass: ""
+  # Deprecated compatibility alias. Prefer `global.defaultStorageClass`.
+  storageClass: ""
+
+nameOverride: ""
+fullnameOverride: ""
+namespaceOverride: ""
+commonLabels: {}
+commonAnnotations: {}
+
+image:
+  registry: docker.io
+  repository: powerdnsadmin/pda-legacy
+  tag: v0.6.1
+  digest: sha256:5741b1f877210878f02923dd45346c7016acefc7eac9b14e90229f94e4c726c4
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# PowerDNS-Admin is an administrative control plane. The chart intentionally
+# defaults to one predictable web replica and a Recreate rollout.
+replicaCount: 1
+revisionHistoryLimit: 3
+updateStrategy:
+  type: Recreate
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  enabled: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  enabled: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+terminationGracePeriodSeconds: 30
+
+config:
+  captchaEnable: false
+  # Safe bootstrap defaults: the route is disabled and the first Administrator
+  # is created only through a local port-forward. Steady-state profiles must
+  # disable sign-up and re-enable the HTTPS settings before exposing a route.
+  csrfCookieSecure: false
+  hstsEnabled: false
+  logLevel: INFO
+  serverExternalSsl: false
+  sessionCookieSecure: false
+  sessionType: sqlalchemy
+  signupEnabled: true
+  siteUrl: http://127.0.0.1:8080
+  sqlalchemyTrackModifications: false
+  gunicorn:
+    workers: 2
+    timeout: 120
+    logLevel: info
+    bindAddress: 0.0.0.0:8080
+
+# The chart never renders Secret objects. Operators must create both named
+# Secrets before installation. See README.md for the exact key contract.
+runtimeSecret:
+  existingSecret: powerdns-admin-runtime
+  keys:
+    secretKey: secret-key
+    pdnsApiUrl: pdns-api-url
+    pdnsApiKey: pdns-api-key
+
+database:
+  existingSecret: powerdns-admin-database
+  keys:
+    username: username
+    password: password
+    database: database
+    sqlalchemyDatabaseUri: sqlalchemy-database-uri
+
+# `entrypoint` is safe for the public single-replica Helm workflow: upstream
+# runs `flask db upgrade` before Gunicorn. `argocdHook` renders one migration
+# Job at wave -10 and starts Gunicorn directly at wave 0.
+migration:
+  mode: entrypoint
+  activeDeadlineSeconds: 600
+  backoffLimit: 3
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+startupProbe:
+  enabled: true
+  path: /ping
+  periodSeconds: 2
+  timeoutSeconds: 2
+  failureThreshold: 60
+
+readinessProbe:
+  enabled: true
+  path: /ping
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+livenessProbe:
+  enabled: true
+  path: /ping
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 6
+
+tmpVolume:
+  sizeLimit: 256Mi
+
+podLabels: {}
+podAnnotations: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# This PostgreSQL instance is dedicated to PowerDNS-Admin. It must never be
+# used as the PowerDNS Authoritative backend database.
+postgresql:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: library/postgres
+    tag: 17.10-alpine3.22
+    digest: sha256:b02d9b5bcf608c2719da32cdabee274a33841202487fd5dc9b065b63f886753f
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+  podSecurityContext:
+    enabled: true
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    fsGroup: 70
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    enabled: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    seccompProfile:
+      type: RuntimeDefault
+  terminationGracePeriodSeconds: 60
+  persistence:
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  startupProbe:
+    periodSeconds: 2
+    timeoutSeconds: 2
+    failureThreshold: 60
+  readinessProbe:
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+  livenessProbe:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 6
+  runtimeVolume:
+    sizeLimit: 64Mi
+  tmpVolume:
+    sizeLimit: 128Mi
+  podLabels: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# NetworkPolicy requires an enforcing CNI. It is intentionally opt-in.
+networkPolicy:
+  enabled: false
+  web:
+    fromAllNamespaces: false
+    from: []
+
+# Optional Istio Gateway/VirtualService and cert-manager Certificate. The
+# target cluster must already provide both CRDs and a matching gateway Pod.
+route:
+  enabled: false
+  host: powerdns-admin.example.invalid
+  gateway:
+    create: true
+    name: ""
+    # The Gateway CR namespace and selected gateway workload namespace are
+    # explicit because they can differ in Istio. They are the same by default.
+    resourceNamespace: istio-system
+    workloadNamespace: istio-system
+    selector:
+      istio: gateway
+  tls:
+    enabled: true
+    secretName: ""
+    certificate:
+      create: true
+      namespace: istio-system
+      issuerRef:
+        kind: ClusterIssuer
+        name: dnspod
+  http:
+    redirectToHttps: true
+    timeout: 120s
