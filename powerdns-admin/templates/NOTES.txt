@@ -14,4 +14,7 @@ Bundled PostgreSQL: {{ ternary "enabled" "disabled" .Values.postgresql.enabled }
 URL: {{ .Values.config.siteUrl }}
 {{- else }}
 The optional Istio/cert-manager route is disabled.
+The ClusterIP Service may still be reachable from inside the cluster. If
+sign-up is enabled, complete first-Administrator bootstrap in a controlled,
+isolated maintenance window and disable sign-up immediately afterward.
 {{- end }}

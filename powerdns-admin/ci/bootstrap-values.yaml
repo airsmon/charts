@@ -1,6 +1,8 @@
-# First-install profile for an empty application database. Keep the route and
-# NetworkPolicy disabled, use kubectl port-forward, register the first
-# Administrator, and then switch to the steady environment profile.
+# First-install profile for an empty application database. Keep the external
+# route disabled, use kubectl port-forward in a controlled maintenance window,
+# register the first Administrator, and then switch to the steady profile.
+# The ClusterIP remains reachable inside the cluster unless the platform
+# provides tested equivalent isolation.
 config:
   csrfCookieSecure: false
   hstsEnabled: false
