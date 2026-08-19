@@ -153,10 +153,15 @@ second application-side migration mechanism.
 ## First Administrator bootstrap
 
 An empty application database has no account. Upstream grants the first user
-registered through `/register` the Administrator role. The Chart therefore
-uses a deliberately local-only bootstrap default: sign-up is enabled, the
-Istio route and NetworkPolicy are disabled, and `siteUrl` is
-`http://127.0.0.1:8080`.
+registered through `/register` the Administrator role. The bootstrap defaults
+enable sign-up while disabling the external Istio route and NetworkPolicy;
+`siteUrl` is `http://127.0.0.1:8080`.
+
+This is **not** a localhost-only network boundary. The ClusterIP Service can
+still be reached by in-cluster workloads unless the platform supplies tested
+equivalent isolation. Perform bootstrap in a controlled maintenance window,
+confirm that no untrusted workload can reach the Service, and keep the window
+open only until the first Administrator is verified and sign-up is disabled.
 
 After the workload is ready, expose it only on the operator workstation:
 
@@ -320,6 +325,8 @@ passed on the target cluster.
 - writable data is limited to the PostgreSQL PVC and bounded `emptyDir`
   runtime paths;
 - bootstrap defaults enable sign-up only while all external routing is off;
+  the ClusterIP remains internally reachable and requires a trusted cluster or
+  equivalent bootstrap isolation;
 - steady-state UAT/production profiles disable sign-up and enable secure
   cookies, HTTPS awareness and HSTS.
 
